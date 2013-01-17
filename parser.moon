@@ -1,3 +1,4 @@
+psil = require 'psil'
 lpeg = require 'lpeg'
 
 pack = (...) -> {...}
@@ -16,6 +17,11 @@ foldr1 = (f) -> (...) ->
     y = f x[i], y
   return y
 
+curry = (f) -> (x, y, ...) ->
+  if y == nil
+    (...) -> f x, ...
+  else
+    f x, y, ...
 swap = (f) -> (y) -> (x) -> (f x) y
 
 show =
@@ -25,32 +31,13 @@ show =
       "(#{a[1]}!#{a[2]})"
   tuple: => "(#{table.concat [tostring w for w in *@[2]], ';'})"
 
-cons = (x, y) ->
-  if y == nil
-    return (y) -> cons x, y
-  with z = pack x, y
-    setmetatable z,
-      __tostring: show.cons
-apply = (x, y) ->
-  if y == nil
-    return (y) -> apply x, y
-  with z = pack '!', pack x, y
-    setmetatable z,
-      __tostring: show.apply
+cons = curry psil.Cons
+apply = curry psil.Apply
 tuple = (x, y, ...) ->
   if y ~= nil
-    with z = pack ';', pack x, y, ...
-      setmetatable z,
-        __tostring: show.tuple
+    psil.Tuple x, y, ...
   else
     x
-
-concat = (x, y) ->
-  with l = {}
-    for v in *x
-      table.insert l, v
-    for v in *y
-      table.insert l, v
 
 count_space = (s) ->
   y = 0
@@ -59,6 +46,42 @@ count_space = (s) ->
       when ' ' then y += 1
       when '\t' then y += 4
   return y
+
+psilstr = (...) ->
+  psil.String ((foldl1 (x, y) -> x .. y) '', ...)
+
+unescape =
+  ['\n']: '\n'
+  ['a']: '\a'
+  ['b']: '\b'
+  ['f']: '\f'
+  ['n']: '\n'
+  ['r']: '\r'
+  ['t']: '\t'
+  ['v']: '\v'
+  ['\\']: '\\'
+  ['\"']: '\"'
+  ['\'']: '\''
+
+Digit = lpeg.R '09'
+Hex = lpeg.R '09', 'AF', 'af'
+Alphabet = lpeg.R 'AZ', 'az'
+Identifier = lpeg.C (Alphabet + Digit + '_')^1
+Sigil = lpeg.C lpeg.S'+-#$@\\'
+
+Hex4 = Hex * Hex * Hex * Hex
+
+CharCodeDec = lpeg.C(Digit * Digit^-2) / (d) -> string.char tonumber d, 10
+CharCodeHex = 'x' * lpeg.C(Hex * Hex) / (x) -> string.char tonumber x, 16
+NamedSequence = lpeg.C(lpeg.S'\nabfnrtv\\\"\'') / unescape
+Escape = lpeg.P'\\' * (CharCodeDec + CharCodeHex + NamedSequence)
+String = '\'' * ((Escape + (lpeg.C(1) - lpeg.S'\n\\\''))^0 / psilstr) * '\''
+
+Equals = lpeg.P'='^1
+LongOpen = '[' * lpeg.Cg(Equals, 'lstr') * '['
+LongClose = ']' * lpeg.C(Equals) * ']'
+CloseEq = lpeg.Cmt LongClose * lpeg.Cb'lstr', (s, i, x, y) -> x == y
+LongString = LongOpen * lpeg.C((1 - CloseEq)^0) * LongClose / (s, o) -> psil.String s
 
 Space = lpeg.S' \t'
 NewLine = lpeg.P'\n'
@@ -75,27 +98,14 @@ Codent = #SameTab * Spaces
 Wrap = NewLine * Codent
 Offside = Indent + Codent
 
-Digit = lpeg.R '09'
-Alphabet = lpeg.R 'AZ', 'az'
-Identifier = lpeg.C (Alphabet + Digit + '_')^1
-Sigil = lpeg.C lpeg.S'+-#$@\\'
+Unit = '(' * Spaces * ')' / '()'
+Square = '[' * Spaces * ']' / '[]'
+Curly = '{' * Spaces * '}' / '{}'
 
 join = (sep, x) -> x * (sep * x)^0
 binary = (op) -> Spaces * op * Spaces
 operator = (op, t) -> (join (binary op) * Wrap^-1, t)
 emittable = (op, t) -> (join Spaces * (op * Spaces * Wrap^-1)^-1, t)
-
-Unit = '(' * Spaces * ')' / '()'
-Square = '[' * Spaces * ']' / '[]'
-Curly = '{' * Spaces * '}' / '{}'
-
-Equals = lpeg.P'='^1
-LongOpen = '[' * lpeg.Cg(Equals, 'lstr') * '['
-LongClose = ']' * lpeg.C(Equals) * ']'
-CloseEq = lpeg.Cmt LongClose * lpeg.Cb'lstr', (s, i, x, y) -> x == y
-LongString = LongOpen * lpeg.C((1 - CloseEq)^0) * LongClose / (s, o) -> s
-
-Token = Identifier + LongString + Unit + Square + Curly
 
 err = (_, i) ->
   error "Syntax error at position #{i}"
@@ -104,9 +114,12 @@ Expr = lpeg.P
   [1]: 'Expr'
   ParenContent: Spaces * NewLines^-1 * ClearTab * Offside * lpeg.V'Blocks' * NewLines^-1 * Spaces
   Paren: '(' * lpeg.V'ParenContent' * ')'
-  Bracket: ('[' * lpeg.V'ParenContent' * ']') / apply '[]'
-  Brace: ('{' * lpeg.V'ParenContent' * '}') / apply '{}'
-  Token: Token + lpeg.V'Paren' + lpeg.V'Bracket' + lpeg.V'Brace'
+  Bracket: ('[' * lpeg.V'ParenContent' * ']')
+  Brace: ('{' * lpeg.V'ParenContent' * '}')
+  Parens: Unit + Square + Curly + lpeg.V'Paren' + lpeg.V'Bracket' / (apply '[]') + lpeg.V'Brace' / (apply '{}')
+  EmbedParen: '\\' * lpeg.V'Parens'
+  EmbedString: '""' + '"' * ((((Escape + (lpeg.C(1) - lpeg.S'\n\\\"'))^1 / psilstr) + lpeg.V'EmbedParen')^1 / tuple) / (apply '""') * '"'
+  Token: Identifier + String + LongString + lpeg.V'EmbedString' + lpeg.V'Parens'
   Term: (Sigil^0 * lpeg.V'Token' + Sigil) / foldr1 apply
   SCons: (operator lpeg.P'.', lpeg.V'Hanger' + lpeg.V'Term') * Spaces / foldl1 cons
   SApply: (emittable lpeg.P'`', lpeg.V'Hanger' + lpeg.V'SCons') * Spaces / foldl1 apply
@@ -131,4 +144,4 @@ Expr = lpeg.P
   Blocks: (join NewLines * Codent, lpeg.V'Block') * Spaces / tuple
   Expr: (Spaces * NewLines)^-1 * CaptureTab * (lpeg.V'Blocks' + lpeg.Cc'()') * NewLines^-1 * Spaces * (-1 + lpeg.P(err))
 
-return {:Expr, :cons, :apply, :tuple}
+return {:Expr}
