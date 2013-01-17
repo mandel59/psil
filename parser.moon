@@ -87,7 +87,13 @@ Unit = '(' * Spaces * ')' / '()'
 Square = '[' * Spaces * ']' / '[]'
 Curly = '{' * Spaces * '}' / '{}'
 
-Token = Unit + Square + Curly + Identifier
+Equals = lpeg.P'='^1
+LongOpen = '[' * lpeg.Cg(Equals, 'lstr') * '['
+LongClose = ']' * lpeg.C(Equals) * ']'
+CloseEq = lpeg.Cmt LongClose * lpeg.Cb'lstr', (s, i, x, y) -> x == y
+LongString = LongOpen * lpeg.C((1 - CloseEq)^0) * LongClose / (s, o) -> s
+
+Token = Identifier + LongString + Unit + Square + Curly
 
 err = (_, i) ->
   error "Syntax error at position #{i}"
@@ -96,9 +102,9 @@ Expr = lpeg.P
   [1]: 'Expr'
   ParenContent: Spaces * NewLines^-1 * ClearTab * Offside * lpeg.V'Blocks' * NewLines^-1 * Spaces
   Paren: '(' * lpeg.V'ParenContent' * ')'
-  Bracket: ('[' * lpeg.V'ParenContent' * ']') / cons '[]'
-  Brace: ('{' * lpeg.V'ParenContent' * '}') / cons '{}'
-  Token: lpeg.V'Paren' + lpeg.V'Bracket' + lpeg.V'Brace' + Token
+  Bracket: ('[' * lpeg.V'ParenContent' * ']') / apply '[]'
+  Brace: ('{' * lpeg.V'ParenContent' * '}') / apply '{}'
+  Token: Token + lpeg.V'Paren' + lpeg.V'Bracket' + lpeg.V'Brace'
   Term: (Sigil^0 * lpeg.V'Token' + Sigil) / foldr1 apply
   SCons: (operator lpeg.P'.', lpeg.V'Hanger' + lpeg.V'Term') * Spaces / foldl1 cons
   SApply: (emittable lpeg.P'`', lpeg.V'Hanger' + lpeg.V'SCons') * Spaces / foldl1 apply
