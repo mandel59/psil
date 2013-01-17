@@ -68,10 +68,12 @@ NewLines = NewLine * (Spaces * NewLine)^0
 Tab = Space^0 / count_space
 CaptureTab = lpeg.Cg Tab, 'tab'
 ClearTab = lpeg.Cg (lpeg.Cc 0), 'tab'
-Indent = lpeg.Cmt Tab * lpeg.Cb'tab', (s, i, x, y) -> x > y
+MoreTab = lpeg.Cmt Tab * lpeg.Cb'tab', (s, i, x, y) -> x > y
 SameTab = lpeg.Cmt Tab * lpeg.Cb'tab', (s, i, x, y) -> x == y
-Wrap = NewLine * #SameTab * Spaces
-Offside = (#Indent * CaptureTab) + (#SameTab * Spaces)
+Indent = #MoreTab * CaptureTab
+Codent = #SameTab * Spaces
+Wrap = NewLine * Codent
+Offside = Indent + Codent
 
 Digit = lpeg.R '09'
 Alphabet = lpeg.R 'AZ', 'az'
@@ -124,9 +126,9 @@ Expr = lpeg.P
   NewLineCont: (NewLine * Offside * #lpeg.S'.`:!' * join Spaces, lpeg.V'Cont')^0
   NewLineContSTuple: (NewLine * Offside * lpeg.V'ContSTuple')^0
   NewLineContWTuple: (NewLine * Offside * lpeg.V'ContWTuple')^0
-  Hanger: NewLines * #Indent * CaptureTab * lpeg.V'Blocks'
+  Hanger: NewLines * Indent * lpeg.V'Blocks'
   Block: lpeg.V'WTuple' * lpeg.V'NewLineCont' / foldl1 (line, cont) -> cont line
-  Blocks: (join NewLines * #SameTab * Spaces, lpeg.V'Block') * Spaces * NewLines^-1 * Spaces / tuple
-  Expr: Spaces * NewLines^-1 * CaptureTab * (lpeg.V'Blocks' + lpeg.Cc'()') * (-1 + lpeg.P(err))
+  Blocks: (join NewLines * Codent, lpeg.V'Block') * Spaces / tuple
+  Expr: (Spaces * NewLines)^-1 * CaptureTab * (lpeg.V'Blocks' + lpeg.Cc'()') * NewLines^-1 * Spaces * (-1 + lpeg.P(err))
 
 return {:Expr, :cons, :apply, :tuple}
