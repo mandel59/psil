@@ -1,7 +1,24 @@
-class Cons
-  new: (x, y) =>
-    @[1] = x
-    @[2] = y
+util = require 'util'
+
+import pack, foldl1, foldr1, curry, swap from util
+
+class Tuple
+  new: (...) =>
+    for k, v in ipairs {...}
+      @[k] = v
+  map: (f) =>
+    with a = @@()
+      for k, v in ipairs @
+        a[k] = f v
+  foldl1: (f) =>
+    x = @[1]
+    for i = 2, #@
+      x = f x, @[i]
+    return x
+  __tostring: =>
+    "(#{table.concat [tostring w for w in *@], ';'})"
+
+class Cons extends Tuple
   fst: => @[1]
   snd: => @[2]
   __tostring: =>
@@ -10,15 +27,6 @@ class Cons
 class Apply extends Cons
   __tostring: =>
     "(#{@[1]}!#{@[2]})"
-
-class Tuple
-  new: (...) =>
-    for k, v in ipairs {...}
-      @[k] = v
-  map: (f) =>
-    @@ unpack [f v for v in *@]
-  __tostring: =>
-    "(#{table.concat [tostring w for w in *@], ';'})"
 
 class String
   escape_sequence =

@@ -1,28 +1,8 @@
+util = require 'util'
 psil = require 'psil'
 lpeg = require 'lpeg'
 
-pack = (...) -> {...}
-
-foldl1 = (f) -> (...) ->
-  x = {...}
-  y = x[1]
-  for i = 2, #x
-    y = f y, x[i]
-  return y
-
-foldr1 = (f) -> (...) ->
-  x = {...}
-  y = x[#x]
-  for i = #x - 1, 1, -1
-    y = f x[i], y
-  return y
-
-curry = (f) -> (x, y, ...) ->
-  if y == nil
-    (...) -> f x, ...
-  else
-    f x, y, ...
-swap = (f) -> (y) -> (x) -> (f x) y
+import pack, foldl1, foldr1, curry, swap from util
 
 show =
   cons: => "(#{@[1]}:#{@[2]})"
@@ -99,8 +79,8 @@ Wrap = NewLine * Codent
 Offside = Indent + Codent
 
 Unit = '(' * Spaces * ')' / '()'
-Square = '[' * Spaces * ']' / '[]'
-Curly = '{' * Spaces * '}' / '{}'
+Square = '[' * Spaces * ']' / -> apply '[]', '()'
+Curly = '{' * Spaces * '}' / -> apply '{}', '()'
 
 join = (sep, x) -> x * (sep * x)^0
 binary = (op) -> Spaces * op * Spaces
@@ -118,7 +98,7 @@ Expr = lpeg.P
   Brace: ('{' * lpeg.V'ParenContent' * '}')
   Parens: Unit + Square + Curly + lpeg.V'Paren' + lpeg.V'Bracket' / (apply '[]') + lpeg.V'Brace' / (apply '{}')
   EmbedParen: '\\' * lpeg.V'Parens'
-  EmbedString: '""' + '"' * ((((Escape + (lpeg.C(1) - lpeg.S'\n\\\"'))^1 / psilstr) + lpeg.V'EmbedParen')^1 / tuple) / (apply '""') * '"'
+  EmbedString: lpeg.P'""' / (-> apply '""', '()') + '"' * ((((Escape + (lpeg.C(1) - lpeg.S'\n\\\"'))^1 / psilstr) + lpeg.V'EmbedParen')^1 / tuple) / (apply '""') * '"'
   Token: Identifier + String + LongString + lpeg.V'EmbedString' + lpeg.V'Parens'
   Term: (Sigil^0 * lpeg.V'Token' + Sigil) / foldr1 apply
   SCons: (operator lpeg.P'.', lpeg.V'Hanger' + lpeg.V'Term') * Spaces / foldl1 cons
