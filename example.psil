@@ -1,0 +1,5 @@
+let
+  x: 'ハロー'
+  y: add(+'1', +'9')
+  z: {a: x; b: y}
+debug.print "\(z.a)ワールド \(z.b)"

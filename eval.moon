@@ -11,7 +11,26 @@ class Scope
     if type(name) == 'string' then return rawget @, name
     switch name.__class
       when psil.Cons
-        return (@[name\fst()])[name\snd()]
+        x = @[name\fst()]
+        if x.__class == @@
+          return x\index name\snd()
+        else
+          return x[name\snd()]
+  newindex: (name, value) =>
+    if type(name) == 'string' then return rawset @, name, value
+    switch name.__class
+      when psil.Cons
+        x = @[name\fst()]
+        if x.__class == @@
+          return x\newindex name\snd(), value
+        else
+          x[name\snd()] = value
+
+class Macro
+  new: (f) =>
+    @macro = f
+  __call: (scope, p) =>
+    @macro scope, p
 
 local eval, func
 
@@ -25,7 +44,10 @@ eval = curry (scope, p) ->
       return scope\index(p)
     when psil.Apply
       f = func scope, p\fst()
-      return f eval scope, p\snd()
+      if type(f) == 'table' and f.__class == Macro
+        return f scope, p\snd()
+      else
+        return f eval scope, p\snd()
     when psil.String
       return p[1]
 
@@ -39,4 +61,4 @@ func = curry (scope, p) ->
     when psil.Apply
       return eval scope, p
 
-return {:eval, :func, :Scope}
+return {:eval, :func, :Scope, :Macro}
