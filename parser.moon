@@ -4,13 +4,6 @@ lpeg = require 'lpeg'
 
 import pack, foldl1, foldr1, curry, swap from util
 
-show =
-  cons: => "(#{@[1]}:#{@[2]})"
-  apply: =>
-      a = @[2]
-      "(#{a[1]}!#{a[2]})"
-  tuple: => "(#{table.concat [tostring w for w in *@[2]], ';'})"
-
 cons = curry psil.Cons
 apply = curry psil.Apply
 tuple = (x, y, ...) ->
@@ -48,8 +41,13 @@ NewLine = lpeg.P'\n'
 Digit = lpeg.R '09'
 Hex = lpeg.R '09', 'AF', 'af'
 Alphabet = lpeg.R 'AZ', 'az'
-Identifier = lpeg.C (Alphabet + Digit + '_')^1
-Sigil = lpeg.C lpeg.S'+-#$@\\'
+Identifier = lpeg.C (Alphabet + '_') * (Alphabet + Digit + '_')^0
+NumSign = lpeg.S'+-'
+AmbOp = lpeg.S'%&*/^~'
+Sigil = lpeg.S'#$@\\' + AmbOp
+NumberDec = NumSign^-1 * Digit^1 * ('.' * Digit^0)^-1 * (lpeg.S'eE' * NumSign^-1 * Digit^1)^-1 / (x) -> psil.Number tonumber x
+NumberHex = NumSign^-1 * '0x' * Hex^1 * ('.' * Hex^0)^-1 * (lpeg.S'pP' * NumSign^-1 * Digit^1)^-1  / (x) -> psil.Number tonumber x
+Number = NumberHex + NumberDec
 
 Hex4 = Hex * Hex * Hex * Hex
 
@@ -58,16 +56,17 @@ CharCodeHex = 'x' * lpeg.C(Hex * Hex) / (x) -> string.char tonumber x, 16
 NamedSequence = lpeg.C(lpeg.S'\nabfnrtv\\\"\'') / unescape
 Escape = lpeg.P'\\' * (CharCodeDec + CharCodeHex + NamedSequence)
 String = '\'' * ((Escape + (lpeg.C(1) - lpeg.S'\n\\\''))^0 / psilstr) * '\''
-ShortString = '?' * ((lpeg.C(1) - (Space + NewLine))^0 / psilstr)
+ShortString = '?' * ((lpeg.C(1) - (Space + NewLine))^1 / psilstr)
 
 Equals = lpeg.P'='^1
 LongOpen = '[' * lpeg.Cg(Equals, 'lstr') * '['
 LongClose = ']' * lpeg.C(Equals) * ']'
 CloseEq = lpeg.Cmt LongClose * lpeg.Cb'lstr', (s, i, x, y) -> x == y
-LongString = LongOpen * lpeg.C((1 - CloseEq)^0) * LongClose / (s, o) -> psil.String s
+LongString = LongOpen * NewLine^-1 * lpeg.C((1 - CloseEq)^0) * LongClose / (s, o) -> psil.String s
 
 LineComment = lpeg.P'--' * (1 - NewLine)^0
-Spaces = Space^0 * LineComment^-1
+BlockComment = lpeg.P'--' * LongString / {}
+Spaces = (Space + BlockComment)^0 * LineComment^-1
 NewLines = NewLine * (Spaces * NewLine)^0
 Tab = Space^0 / count_space
 CaptureTab = lpeg.Cg Tab, 'tab'
@@ -78,6 +77,7 @@ Indent = #MoreTab * CaptureTab
 Codent = #SameTab * Spaces
 Wrap = NewLine * Codent
 Offside = Indent + Codent
+Shebang = lpeg.P'#!' * (1 - NewLine)^0
 
 Unit = '(' * Spaces * ')' / '()'
 Square = '[' * Spaces * ']' / -> apply '[]', '()'
@@ -86,10 +86,17 @@ Curly = '{' * Spaces * '}' / -> apply '{}', '()'
 join = (sep, x) -> x * (sep * x)^0
 binary = (op) -> Spaces * op * Spaces
 operator = (op, t) -> (join (binary op) * Wrap^-1, t)
-emittable = (op, t) -> (join Spaces * (op * Spaces * Wrap^-1)^-1, t)
+emittable = (op, t) -> (join Spaces * (op * Spaces * Wrap^-1)^-1 - (AmbOp + NumSign), t)
 
 err = (_, i) ->
   error "Syntax error at position #{i}"
+
+foldop = (...) ->
+  v = {...}
+  x = v[1]
+  for i = 3, #v, 2
+    x = apply (cons x, v[i - 1]), v[i]
+  return x
 
 Expr = lpeg.P
   [1]: 'Expr'
@@ -101,10 +108,14 @@ Expr = lpeg.P
   EmbedParen: '\\' * lpeg.V'Parens'
   EmbedString: lpeg.P'""' / (-> apply '""', '()') + '"' * ((((Escape + (lpeg.C(1) - lpeg.S'\n\\\"'))^1 / psilstr) + lpeg.V'EmbedParen')^1 / tuple) / (apply '""') * '"'
   Token: Identifier + ShortString + String + LongString + lpeg.V'EmbedString' + lpeg.V'Parens'
-  Term: (Sigil^0 * lpeg.V'Token' + Sigil) / foldr1 apply
+  Term: (lpeg.C(Sigil)^0 * Number + lpeg.C(Sigil)^0 * lpeg.C(NumSign)^-1 * lpeg.V'Token') / foldr1 apply
   SCons: (operator lpeg.P'.', lpeg.V'Hanger' + lpeg.V'Term') * Spaces / foldl1 cons
   SApply: (emittable lpeg.P'`', lpeg.V'Hanger' + lpeg.V'SCons') * Spaces / foldl1 apply
-  STupleStub: (operator lpeg.P',', lpeg.V'Hanger' + lpeg.V'SApply') * Spaces
+  Power: (operator lpeg.C('^'), lpeg.V'Hanger' + lpeg.V'SApply') * Spaces / foldop
+  MultDiv: (operator lpeg.C(lpeg.S'*/%'), lpeg.V'Hanger' + lpeg.V'Power') * Spaces / foldop
+  AddSub: (operator lpeg.C(NumSign), lpeg.V'Hanger' + lpeg.V'MultDiv') * Spaces / foldop
+  Concat: (operator lpeg.C('~'), lpeg.V'Hanger' + lpeg.V'AddSub') * Spaces / foldop
+  STupleStub: (operator lpeg.P',', lpeg.V'Hanger' + lpeg.V'Concat') * Spaces
   STuple: lpeg.V'STupleStub' * lpeg.V'NewLineContSTuple' * lpeg.P','^-1 / tuple
   WCons: (operator lpeg.P':', lpeg.V'Hanger' + lpeg.V'STuple') * Spaces / foldr1 cons
   WApply: (operator lpeg.P'!', lpeg.V'Hanger' + lpeg.V'WCons') * Spaces / foldr1 apply
@@ -117,12 +128,12 @@ Expr = lpeg.P
   ContWApply: lpeg.P'!' * Spaces * lpeg.V'WApply' / swap apply
   ContWTuple: lpeg.P';' * Spaces * lpeg.V'WTupleStub'
   Cont: lpeg.V'ContSCons' + lpeg.V'ContSApply' + lpeg.V'ContWCons' + lpeg.V'ContWApply'
-  NewLineCont: (NewLine * Offside * #lpeg.S'.`:!' * join Spaces, lpeg.V'Cont')^0
-  NewLineContSTuple: (NewLine * Offside * lpeg.V'ContSTuple')^0
-  NewLineContWTuple: (NewLine * Offside * lpeg.V'ContWTuple')^0
+  NewLineCont: (NewLines * Offside * #lpeg.S'.`:!' * join Spaces, lpeg.V'Cont')^0
+  NewLineContSTuple: (NewLines * Offside * lpeg.V'ContSTuple')^0
+  NewLineContWTuple: (NewLines * Offside * lpeg.V'ContWTuple')^0
   Hanger: NewLines * Indent * lpeg.V'Blocks'
   Block: lpeg.V'WTuple' * lpeg.V'NewLineCont' / foldl1 (line, cont) -> cont line
   Blocks: (join NewLines * Codent, lpeg.V'Block') * Spaces / tuple
-  Expr: (Spaces * NewLines)^-1 * CaptureTab * (lpeg.V'Blocks' + lpeg.Cc'()') * NewLines^-1 * Spaces * (-1 + lpeg.P(err))
+  Expr: Shebang^-1 * (Spaces * NewLines)^-1 * CaptureTab * (lpeg.V'Blocks' + lpeg.Cc'()') * NewLines^-1 * Spaces * (-1 + lpeg.P(err))
 
 return {:Expr}
